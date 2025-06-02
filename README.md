@@ -52,7 +52,7 @@ All messages exchanged during the Control Phase follow this structure:
 
 | Field   | Size (bytes) | Description                                                      |
 |:--------|:-------------|:-----------------------------------------------------------------|
-| Command | 1            | The command ID (see [Commands](#4-commands)).                    |
+| Command | 1            | The command ID (see [Commands](#4-commands-control-phase)).      |
 | Length  | 2            | Big-endian `uint16` representing the length of the `Data` field. |
 | Data    | `Length`     | Payload specific to the command. Often CBOR-encoded.             |
 
@@ -89,7 +89,7 @@ structures (like device information or paths) is CBOR-encoded.
 #### 4.2. `CommandStart` (Value: `0x02`)
 
 - **Purpose:** Instructs the proxy to start relaying raw CTAPHID packets for a specific FIDO2 HID device.
-  After a successful `CommandStart`, the protocol transitions to the [Proxy Phase](#5-proxy-phase).
+  After a successful `CommandStart`, the protocol transitions to the [Proxy Phase](#5-proxy-phase-after-successful-commandstart).
 - **Client Request:**
   - Command: `0x02`
   - Length: Size of the CBOR-encoded device path string.
@@ -99,8 +99,9 @@ structures (like device information or paths) is CBOR-encoded.
   - **Success:**
     - The server attempts to open the specified HID device.
     - If successful, the server **does not send a structured `Message` response**.
-    - Instead, the named pipe connection transitions into the [Proxy Phase](#5-proxy-phase). The pipe remains open,
-      and subsequent data sent by the client will be treated as raw CTAPHID packets destined for the HID device.
+    - Instead, the named pipe connection transitions into the [Proxy Phase](#5-proxy-phase-after-successful-commandstart).
+      The pipe remains open, and subsequent data sent by the client will be treated as raw CTAPHID packets destined
+      for the HID device.
   - **Failure:**
     - If the server fails to open the specified HID device (e.g., device not found, access denied at the HID level),
       the proxy service will typically close the named pipe connection. The client will detect this as an EOF or
