@@ -7,9 +7,8 @@ import (
 	"net"
 	"runtime"
 	"sync"
-	"time"
 
-	"github.com/sstallion/go-hid"
+	"github.com/go-ctap/hid"
 )
 
 type Proxy struct {
@@ -40,16 +39,6 @@ func (p *Proxy) start(path string, readCh chan<- []byte, writeCh <-chan []byte) 
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
-	if err := hid.Init(); err != nil {
-		p.logger.Error("HID init error", "err", err)
-		return err
-	}
-	defer func() {
-		if err := hid.Exit(); err != nil {
-			p.logger.Error("HID exit error", "err", err)
-		}
-	}()
-
 	dev, err := hid.OpenPath(path)
 	if err != nil {
 		p.logger.Error("HID open error", "err", err)
@@ -77,7 +66,7 @@ func (p *Proxy) start(path string, readCh chan<- []byte, writeCh <-chan []byte) 
 			p.logger.Debug("HID write", "data", data)
 		default:
 			buf := make([]byte, 64)
-			n, err := dev.ReadWithTimeout(buf, 10*time.Millisecond)
+			n, err := dev.Read(buf)
 			if n > 0 {
 				data := make([]byte, n)
 				copy(data, buf)
@@ -85,7 +74,6 @@ func (p *Proxy) start(path string, readCh chan<- []byte, writeCh <-chan []byte) 
 				p.logger.Debug("HID read", "data", data)
 			}
 			if err != nil &&
-				!errors.Is(err, hid.ErrTimeout) &&
 				!errors.Is(err, io.EOF) {
 				p.logger.Error("HID read error", "err", err)
 				return err
@@ -96,15 +84,17 @@ func (p *Proxy) start(path string, readCh chan<- []byte, writeCh <-chan []byte) 
 
 func (p *Proxy) Enumerate() ([]*hid.DeviceInfo, error) {
 	devInfos := make([]*hid.DeviceInfo, 0)
-	if err := hid.Enumerate(hid.VendorIDAny, hid.ProductIDAny, func(info *hid.DeviceInfo) error {
-		if info.UsagePage != 0xf1d0 || info.Usage != 0x01 {
-			return nil
+	for devInfo, err := range hid.Enumerate() {
+		if err != nil {
+			p.logger.Error("Device enumeration error", "err", err)
+			return nil, err
 		}
 
-		devInfos = append(devInfos, info)
-		return nil
-	}); err != nil {
-		return nil, err
+		if devInfo.UsagePage != 0xf1d0 || devInfo.Usage != 0x01 {
+			continue
+		}
+
+		devInfos = append(devInfos, devInfo)
 	}
 
 	return devInfos, nil
@@ -120,7 +110,7 @@ func (p *Proxy) Proxy(conn net.Conn, path string) {
 	// Closing writeCh will close HID goroutine
 	writeCh := make(chan []byte)
 
-	// Запуск актора для HID-устройства
+	// Start device HID actor
 	go func() {
 		if err := p.start(path, readCh, writeCh); err != nil {
 			p.logger.Error("HID actor error", "err", err)

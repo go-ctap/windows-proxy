@@ -1,8 +1,8 @@
 package main
 
 import (
-	"github.com/savely-krasovsky/go-ctaphid-windows-proxy/internal/config"
-	"github.com/savely-krasovsky/go-ctaphid-windows-proxy/internal/domain"
+	"github.com/go-ctap/windows-proxy/internal/config"
+	"github.com/go-ctap/windows-proxy/internal/domain"
 	"log/slog"
 	"os"
 

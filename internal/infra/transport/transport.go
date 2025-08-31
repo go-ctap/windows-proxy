@@ -2,14 +2,15 @@ package transport
 
 import (
 	"errors"
-	"github.com/savely-krasovsky/go-ctaphid-windows-proxy/internal/domain"
-	"github.com/savely-krasovsky/go-ctaphid-windows-proxy/pkg/proxy"
 	"log/slog"
 	"net"
 
+	"github.com/go-ctap/windows-proxy/internal/domain"
+	"github.com/go-ctap/windows-proxy/pkg/proxy"
+
 	"github.com/Microsoft/go-winio"
 	"github.com/fxamacker/cbor/v2"
-	"github.com/savely-krasovsky/go-ctaphid/pkg/hidproxy"
+	"github.com/go-ctap/ctaphid/pkg/hidproxy"
 )
 
 type pipeDelivery struct {
