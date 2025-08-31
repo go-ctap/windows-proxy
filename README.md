@@ -1,7 +1,5 @@
 # go-ctaphid-windows-proxy
 
----
-
 ## Overview
 
 On Windows, direct communication with FIDO2 tokens using the CTAP protocol (e.g., over HID) typically requires
@@ -17,15 +15,13 @@ This program addresses this limitation by acting as a **proxy service**. It is d
    these requests to the actual FIDO2 HID device and returns the responses.
 
 This architecture enables unprivileged applications to communicate with FIDO2 tokens. Specifically,
-my [go-ctaphid](https://github.com/savely-krasovsky/go-ctaphid) library is designed to leverage this proxy,
+my [go-ctaphid](https://github.com/go-ctap/ctaphid) library is designed to leverage this proxy,
 allowing Go applications to interact with FIDO2 tokens on Windows without needing administrator rights for
 the application itself.
 
 In essence, this program provides a bridge for unprivileged CTAP access to FIDO2 tokens on Windows.
 
 Okay, here's a documentation draft for your proxy protocol based on the provided Go code.
-
----
 
 ## HID Proxy Protocol Documentation
 

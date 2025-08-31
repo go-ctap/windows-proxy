@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/savely-krasovsky/go-ctaphid-windows-proxy/internal/config"
-	"github.com/savely-krasovsky/go-ctaphid-windows-proxy/internal/infra/transport"
-	"github.com/savely-krasovsky/go-ctaphid-windows-proxy/pkg/proxy"
+	"github.com/go-ctap/windows-proxy/internal/config"
+	"github.com/go-ctap/windows-proxy/internal/infra/transport"
+	"github.com/go-ctap/windows-proxy/pkg/proxy"
 
 	"golang.org/x/sys/windows/svc"
 )
