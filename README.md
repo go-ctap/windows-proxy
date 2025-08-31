@@ -1,4 +1,4 @@
-# go-ctaphid-windows-proxy
+# CTAP Windows proxy
 
 ## Overview
 
