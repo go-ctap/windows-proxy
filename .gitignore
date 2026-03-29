@@ -27,3 +27,6 @@ go.work.sum
 
 # Goland
 .idea/
+
+# Binaries
+_obj/

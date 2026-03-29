@@ -35,58 +35,38 @@ func New(opts ...Option) *Proxy {
 	return p
 }
 
-func (p *Proxy) start(path string, readCh chan<- []byte, writeCh <-chan []byte) error {
+func (p *Proxy) open(path string) (*hid.Device, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	dev, err := hid.OpenPath(path)
 	if err != nil {
 		p.logger.Error("HID open error", "err", err)
-		return err
+		return nil, err
 	}
-	defer func() {
-		if err := dev.Close(); err != nil {
-			p.logger.Error("HID close error", "err", err)
-		}
-	}()
 
-	for {
-		select {
-		case data, ok := <-writeCh:
-			if !ok {
-				p.logger.Info("HID actor closed")
-				return nil
-			}
+	return dev, nil
+}
 
-			_, err := dev.Write(data)
-			if err != nil {
-				p.logger.Error("HID write error", "err", err)
-				return err
-			}
-			p.logger.Debug("HID write", "data", data)
-		default:
-			buf := make([]byte, 64)
-			n, err := dev.Read(buf)
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, buf)
-				readCh <- data
-				p.logger.Debug("HID read", "data", data)
-			}
-			if err != nil &&
-				!errors.Is(err, io.EOF) {
-				p.logger.Error("HID read error", "err", err)
-				return err
-			}
+func writeFull(w io.Writer, data []byte) error {
+	for len(data) > 0 {
+		n, err := w.Write(data)
+		if err != nil {
+			return err
 		}
+		if n == 0 {
+			return io.ErrShortWrite
+		}
+		data = data[n:]
 	}
+
+	return nil
 }
 
 func (p *Proxy) Enumerate() ([]*hid.DeviceInfo, error) {
 	devInfos := make([]*hid.DeviceInfo, 0)
 	for devInfo, err := range hid.Enumerate() {
 		if err != nil {
-			p.logger.Error("Device enumeration error", "err", err)
 			return nil, err
 		}
 
@@ -101,45 +81,54 @@ func (p *Proxy) Enumerate() ([]*hid.DeviceInfo, error) {
 }
 
 func (p *Proxy) Proxy(conn net.Conn, path string) {
-	defer func() {
+	dev, err := p.open(path)
+	if err != nil {
 		_ = conn.Close()
-	}()
-
-	// Closing readCh will stop hid -> pipe goroutine
-	readCh := make(chan []byte)
-	// Closing writeCh will close HID goroutine
-	writeCh := make(chan []byte)
-
-	// Start device HID actor
-	go func() {
-		if err := p.start(path, readCh, writeCh); err != nil {
-			p.logger.Error("HID actor error", "err", err)
-		}
-		close(readCh)
-	}()
+		return
+	}
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 
+	var closeOnce sync.Once
+	closeResources := func() {
+		closeOnce.Do(func() {
+			if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				p.logger.Error("Pipe close error", "err", err)
+			}
+			if err := dev.Close(); err != nil {
+				p.logger.Error("HID close error", "err", err)
+			}
+		})
+	}
+
 	// pipe -> hid
 	go func() {
 		defer wg.Done()
-		// 64-byte packet + 1 byte for report ID
+
 		buf := make([]byte, 65)
 		for {
-			// If something went wrong with the pipe, it will lead to closing the HID device
 			n, err := conn.Read(buf)
 			if n > 0 {
 				data := make([]byte, n)
-				copy(data, buf)
-				writeCh <- data
+				copy(data, buf[:n])
+
+				_, writeErr := dev.Write(data)
+				if writeErr != nil {
+					p.logger.Error("HID write error", "err", writeErr)
+					closeResources()
+					return
+				}
+
+				p.logger.Debug("HID write", "data", data)
 			}
+
 			if err != nil {
-				if err != io.EOF {
+				if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 					p.logger.Error("Pipe -> HID read error", "err", err)
 				}
-				close(writeCh)
-				break
+				closeResources()
+				return
 			}
 		}
 	}()
@@ -147,23 +136,34 @@ func (p *Proxy) Proxy(conn net.Conn, path string) {
 	// hid -> pipe
 	go func() {
 		defer wg.Done()
+
 		for {
-			// If something went wrong with the device, it will lead to closing the pipe
-			data, ok := <-readCh
-			if !ok {
-				// In hid -> pipe we should close pipe
-				_ = conn.Close()
-				break
+			buf := make([]byte, 64)
+			n, err := dev.Read(buf)
+			if n > 0 {
+				data := make([]byte, n)
+				copy(data, buf[:n])
+
+				if err := writeFull(conn, data); err != nil {
+					p.logger.Error("Pipe write error", "err", err)
+					closeResources()
+					return
+				}
+
+				p.logger.Debug("HID read", "data", data)
 			}
 
-			_, err := conn.Write(data)
 			if err != nil {
-				p.logger.Error("Pipe write error", "err", err)
+				if !errors.Is(err, io.EOF) {
+					p.logger.Error("HID read error", "err", err)
+				}
+				closeResources()
 				return
 			}
 		}
 	}()
 
 	wg.Wait()
+	closeResources()
 	p.logger.Info("Proxy closed")
 }
