@@ -81,8 +81,10 @@ loop:
 }
 
 func (p *program) run(svcName string, isDebug bool) {
-	if err := eventlog.InstallAsEventCreate(svcName, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
-		p.logger.Error("Error while installing event log!", "err", err)
+	if !isDebug {
+		if err := eventlog.InstallAsEventCreate(svcName, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
+			p.logger.Error("Error while installing event log!", "err", err)
+		}
 	}
 
 	p.logger.Info("Starting service!", "svc_name", svcName)
