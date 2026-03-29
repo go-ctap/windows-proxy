@@ -50,6 +50,7 @@ func (d *pipeDelivery) Listen() (net.Listener, error) {
 		// deny FILE_CREATE_PIPE_INSTANCE for Everyone
 		// allow read/write access for authenticated users
 		// allow read/write access for built-in guest account
+		MessageMode:        true,
 		SecurityDescriptor: `D:(D;OICI;GA;;;S-1-5-2)(A;OICI;GA;;;S-1-5-32-544)(A;OICI;GA;;;S-1-5-18)(D;OICI;0x4;;;S-1-1-0)(A;OICI;GRGW;;;S-1-5-11)(A;OICI;GRGW;;;S-1-5-32-546)`,
 	})
 }
@@ -89,7 +90,7 @@ func (d *pipeDelivery) Serve(l net.Listener) error {
 		case hidproxy.CommandEnumerate:
 			devInfos, err := d.proxy.Enumerate()
 			if err != nil {
-				d.logger.Error("Enumerate error", "err", err)
+				d.logger.Error("Device enumeration error", "err", err)
 				_ = conn.Close()
 				continue
 			}
