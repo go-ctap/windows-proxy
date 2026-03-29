@@ -7,7 +7,6 @@ import (
 	"github.com/go-ctap/windows-proxy/internal/config"
 	"github.com/go-ctap/windows-proxy/internal/domain"
 	"github.com/go-ctap/windows-proxy/pkg/devnotify"
-	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/debug"
 	"golang.org/x/sys/windows/svc/eventlog"
@@ -22,12 +21,15 @@ type program struct {
 }
 
 func (p *program) Execute(args []string, r <-chan svc.ChangeRequest, changes chan<- svc.Status) (ssec bool, errno uint32) {
+	var wlog *eventlog.Log
 	wlog, err := eventlog.Open(svcName)
 	if err != nil {
 		p.logger.Error("Error while opening event log!", "err", err)
 		return
 	}
-	defer wlog.Close()
+	defer func() {
+		_ = wlog.Close()
+	}()
 
 	const cmdsAccepted = svc.AcceptStop | svc.AcceptShutdown
 	changes <- svc.Status{State: svc.StartPending}
@@ -46,25 +48,23 @@ func (p *program) Execute(args []string, r <-chan svc.ChangeRequest, changes cha
 		}
 	}()
 
-	wlog.Info(1, "Service started!")
+	_ = wlog.Info(1, "Service started!")
 
-	wlog.Info(1, "Registering device notification")
-	if err := devnotify.RegisterDeviceNotification(svc.StatusHandle()); err != nil {
-		wlog.Error(2, "Failed to register device notification")
-		os.Exit(1)
+	if statusHandle := svc.StatusHandle(); statusHandle != 0 {
+		_ = wlog.Info(1, "Registering device notification")
+		if err := devnotify.RegisterDeviceNotification(statusHandle); err != nil {
+			_ = wlog.Error(2, "Failed to register device notification")
+			os.Exit(1)
+		}
 	}
 
 loop:
 	for c := range r {
-		if c.EventType == windows.SERVICE_CONTROL_DEVICEEVENT {
-			wlog.Info(1, "Device event")
-		}
-
 		switch c.Cmd {
 		case svc.Interrogate:
 			changes <- c.CurrentStatus
 		case svc.DeviceEvent:
-			wlog.Info(1, "Device event")
+			_ = wlog.Info(1, "Device event")
 			changes <- c.CurrentStatus
 		case svc.Stop, svc.Shutdown:
 			if err := p.delivery.Shutdown(); err != nil {

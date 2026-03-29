@@ -46,7 +46,8 @@ func registerDeviceNotification(
 }
 
 const (
-	_DBT_DEVTYP_DEVICEINTERFACE = 0x00000005
+	_DBT_DEVTYP_DEVICEINTERFACE   = 0x00000005
+	_DEVICE_NOTIFY_SERVICE_HANDLE = 0x00000001
 )
 
 func RegisterDeviceNotification(hReceiver windows.Handle) error {
@@ -60,7 +61,7 @@ func RegisterDeviceNotification(hReceiver windows.Handle) error {
 	notificationFilter.Devicetype = _DBT_DEVTYP_DEVICEINTERFACE
 	notificationFilter.Classguid = _GUID(*hidGuid)
 
-	if _, err := registerDeviceNotification(hReceiver, notificationFilter, 0); err != nil {
+	if _, err := registerDeviceNotification(hReceiver, notificationFilter, _DEVICE_NOTIFY_SERVICE_HANDLE); err != nil {
 		return err
 	}
 
