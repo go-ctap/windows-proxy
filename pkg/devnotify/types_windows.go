@@ -10,7 +10,6 @@ import "C"
 
 type (
 	_GUID                            C.GUID
-	_HDEVNOTIFY                      C.HDEVNOTIFY
 	_DEV_BROADCAST_HDR               C.DEV_BROADCAST_HDR
 	_DEV_BROADCAST_DEVICEINTERFACE_W C.DEV_BROADCAST_DEVICEINTERFACE_W
 )

@@ -1,18 +1,29 @@
 package proxy
 
 import (
+	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
 	"net"
 	"runtime"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/go-ctap/hid"
 )
 
+const (
+	hidReportSize = 65
+	hidPacketSize = 64
+)
+
 type Proxy struct {
-	logger *slog.Logger
+	logger      *slog.Logger
+	nextSession atomic.Uint64
+	activeMu    sync.Mutex
+	active      map[string]struct{}
 }
 
 type Option func(*Proxy)
@@ -26,6 +37,7 @@ func WithLogger(logger *slog.Logger) Option {
 func New(opts ...Option) *Proxy {
 	p := &Proxy{
 		logger: slog.Default(),
+		active: make(map[string]struct{}),
 	}
 
 	for _, opt := range opts {
@@ -33,6 +45,25 @@ func New(opts ...Option) *Proxy {
 	}
 
 	return p
+}
+
+func (p *Proxy) acquire(path string) bool {
+	p.activeMu.Lock()
+	defer p.activeMu.Unlock()
+
+	if _, ok := p.active[path]; ok {
+		return false
+	}
+
+	p.active[path] = struct{}{}
+	return true
+}
+
+func (p *Proxy) release(path string) {
+	p.activeMu.Lock()
+	defer p.activeMu.Unlock()
+
+	delete(p.active, path)
 }
 
 func (p *Proxy) open(path string) (*hid.Device, error) {
@@ -63,6 +94,24 @@ func writeFull(w io.Writer, data []byte) error {
 	return nil
 }
 
+func hidPacketLogAttrs(data []byte, hasReportID bool) []any {
+	attrs := []any{"bytes", len(data)}
+
+	offset := 0
+	if hasReportID {
+		offset = 1
+	}
+	if len(data) >= offset+5 {
+		attrs = append(
+			attrs,
+			"cid", hex.EncodeToString(data[offset:offset+4]),
+			"cmd_or_seq", "0x"+hex.EncodeToString(data[offset+4:offset+5]),
+		)
+	}
+
+	return attrs
+}
+
 func (p *Proxy) Enumerate() ([]*hid.DeviceInfo, error) {
 	devInfos := make([]*hid.DeviceInfo, 0)
 	for devInfo, err := range hid.Enumerate() {
@@ -81,55 +130,95 @@ func (p *Proxy) Enumerate() ([]*hid.DeviceInfo, error) {
 }
 
 func (p *Proxy) Proxy(conn net.Conn, path string) {
-	dev, err := p.open(path)
-	if err != nil {
+	sessionID := p.nextSession.Add(1)
+	logger := p.logger.With("proxy_session", sessionID, "path", path)
+	startedAt := time.Now()
+
+	if !p.acquire(path) {
+		logger.Warn("Device already has active proxy session")
 		_ = conn.Close()
 		return
 	}
+	defer p.release(path)
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	dev, err := p.open(path)
+	if err != nil {
+		_ = conn.Close()
+		logger.Info("Proxy closed", "duration", time.Since(startedAt), "reason", "hid_open_error")
+		return
+	}
+	logger.Info("Proxy started")
 
+	done := make(chan struct{})
+	closeReason := "unknown"
 	var closeOnce sync.Once
-	closeResources := func() {
+	closeProxy := func(reason string) {
 		closeOnce.Do(func() {
-			if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-				p.logger.Error("Pipe close error", "err", err)
-			}
+			closeReason = reason
+			close(done)
+			_ = conn.Close()
 			if err := dev.Close(); err != nil {
-				p.logger.Error("HID close error", "err", err)
+				logger.Error("HID close error", "err", err)
 			}
 		})
 	}
+
+	defer func() {
+		closeProxy("proxy_complete")
+		logger.Info("Proxy closed", "duration", time.Since(startedAt), "reason", closeReason)
+	}()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
 
 	// pipe -> hid
 	go func() {
 		defer wg.Done()
 
-		buf := make([]byte, 65)
+		buf := make([]byte, hidReportSize)
 		for {
-			n, err := conn.Read(buf)
-			if n > 0 {
-				data := make([]byte, n)
-				copy(data, buf[:n])
-
-				_, writeErr := dev.Write(data)
-				if writeErr != nil {
-					p.logger.Error("HID write error", "err", writeErr)
-					closeResources()
-					return
-				}
-
-				p.logger.Debug("HID write", "data", data)
-			}
-
+			n, err := io.ReadFull(conn, buf)
 			if err != nil {
-				if !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
-					p.logger.Error("Pipe -> HID read error", "err", err)
+				select {
+				case <-done:
+					return
+				default:
 				}
-				closeResources()
+
+				if n > 0 {
+					logger.Debug("Pipe closed with partial HID report", "bytes", n, "err", err)
+					closeProxy("pipe_closed_with_partial_report")
+				} else if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+					closeProxy("pipe_closed")
+				} else {
+					logger.Error("Pipe -> HID read error", "err", err)
+					closeProxy("pipe_read_error")
+				}
 				return
 			}
+
+			data := make([]byte, len(buf))
+			copy(data, buf)
+
+			written, writeErr := dev.Write(data)
+			if writeErr != nil {
+				select {
+				case <-done:
+					return
+				default:
+				}
+
+				logger.Error("HID write error", "err", writeErr)
+				closeProxy("hid_write_error")
+				return
+			}
+			if written != len(data) {
+				logger.Error("HID short write", "bytes", written, "want", len(data))
+				closeProxy("hid_short_write")
+				return
+			}
+
+			logger.Debug("HID write", hidPacketLogAttrs(data, true)...)
 		}
 	}()
 
@@ -138,32 +227,40 @@ func (p *Proxy) Proxy(conn net.Conn, path string) {
 		defer wg.Done()
 
 		for {
-			buf := make([]byte, 64)
+			buf := make([]byte, hidPacketSize)
 			n, err := dev.Read(buf)
 			if n > 0 {
 				data := make([]byte, n)
 				copy(data, buf[:n])
 
 				if err := writeFull(conn, data); err != nil {
-					p.logger.Error("Pipe write error", "err", err)
-					closeResources()
+					select {
+					case <-done:
+						return
+					default:
+					}
+
+					logger.Error("Pipe write error", "err", err)
+					closeProxy("pipe_write_error")
 					return
 				}
 
-				p.logger.Debug("HID read", "data", data)
+				logger.Debug("HID read", hidPacketLogAttrs(data, false)...)
 			}
 
 			if err != nil {
-				if !errors.Is(err, io.EOF) {
-					p.logger.Error("HID read error", "err", err)
+				select {
+				case <-done:
+					return
+				default:
 				}
-				closeResources()
+
+				logger.Error("HID read error", "err", err)
+				closeProxy("hid_read_error")
 				return
 			}
 		}
 	}()
 
 	wg.Wait()
-	closeResources()
-	p.logger.Info("Proxy closed")
 }

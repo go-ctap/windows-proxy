@@ -36,7 +36,7 @@ func (d *pipeDelivery) Listen() (net.Listener, error) {
 	if d.config.Debug {
 		addr = d.config.Address
 	}
-	d.logger.Info("Listening HTTP requests.", "addr", addr)
+	d.logger.Info("Listening transport requests.", "addr", addr)
 
 	if d.config.Debug {
 		return net.Listen("tcp", d.config.Address)
@@ -79,47 +79,55 @@ func (d *pipeDelivery) Serve(l net.Listener) error {
 		}
 		d.logger.Info("Accepted pipe connection")
 
-		msg, err := hidproxy.ParseMessage(conn)
+		go d.handleConn(conn)
+	}
+}
+
+func (d *pipeDelivery) handleConn(conn net.Conn) {
+	msg, err := hidproxy.ParseMessage(conn)
+	if err != nil {
+		d.logger.Error("Parse message error", "err", err)
+		_ = conn.Close()
+		return
+	}
+
+	switch msg.Command {
+	case hidproxy.CommandEnumerate:
+		devInfos, err := d.proxy.Enumerate()
 		if err != nil {
-			d.logger.Error("Parse message error", "err", err)
+			d.logger.Error("Device enumeration error", "err", err)
 			_ = conn.Close()
-			continue
+			return
 		}
 
-		switch msg.Command {
-		case hidproxy.CommandEnumerate:
-			devInfos, err := d.proxy.Enumerate()
-			if err != nil {
-				d.logger.Error("Device enumeration error", "err", err)
-				_ = conn.Close()
-				continue
-			}
-
-			msg, err := hidproxy.NewMessage(hidproxy.CommandEnumerate, devInfos)
-			if err != nil {
-				d.logger.Error("NewMessage error", "err", err)
-				_ = conn.Close()
-				continue
-			}
-
-			if _, err := msg.WriteTo(conn); err != nil {
-				d.logger.Error("WriteTo error", "err", err)
-				_ = conn.Close()
-				continue
-			}
-
-			d.logger.Info("Enumerate response sent")
+		msg, err := hidproxy.NewMessage(hidproxy.CommandEnumerate, devInfos)
+		if err != nil {
+			d.logger.Error("NewMessage error", "err", err)
 			_ = conn.Close()
-		case hidproxy.CommandStart:
-			var path string
-			if err := cbor.Unmarshal(msg.Data, &path); err != nil {
-				d.logger.Error("Unmarshal error", "err", err)
-				_ = conn.Close()
-				continue
-			}
-
-			go d.proxy.Proxy(conn, path)
+			return
 		}
+
+		if _, err := msg.WriteTo(conn); err != nil {
+			d.logger.Error("WriteTo error", "err", err)
+			_ = conn.Close()
+			return
+		}
+
+		d.logger.Info("Enumerate response sent")
+		_ = conn.Close()
+	case hidproxy.CommandStart:
+		var path string
+		if err := cbor.Unmarshal(msg.Data, &path); err != nil {
+			d.logger.Error("Unmarshal error", "err", err)
+			_ = conn.Close()
+			return
+		}
+
+		d.logger.Debug("Start command received", "path", path)
+		d.proxy.Proxy(conn, path)
+	default:
+		d.logger.Error("Unknown command", "command", msg.Command)
+		_ = conn.Close()
 	}
 }
 
