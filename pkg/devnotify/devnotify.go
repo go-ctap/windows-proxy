@@ -1,4 +1,4 @@
-//go:generate powershell -Command "go tool cgo -godefs types_windows.go | Set-Content -Path ztypes_windows.go -Encoding UTF8"
+//go:generate powershell -Command "go tool cgo -godefs types_windows.go | gofmt | Set-Content -Path ztypes_windows.go -Encoding Ascii"
 package devnotify
 
 import (
@@ -15,6 +15,8 @@ var (
 	user32                          = syscall.NewLazyDLL("user32.dll")
 	procRegisterDeviceNotificationW = user32.NewProc("RegisterDeviceNotificationW")
 )
+
+type _HDEVNOTIFY uintptr
 
 func getHidGuid() (*windows.GUID, error) {
 	var hidGuid windows.GUID
@@ -39,10 +41,10 @@ func registerDeviceNotification(
 		uintptr(flags),
 	)
 	if r1 == 0 {
-		return nil, err
+		return 0, err
 	}
 
-	return _HDEVNOTIFY(unsafe.Pointer(r1)), nil
+	return _HDEVNOTIFY(r1), nil
 }
 
 const (

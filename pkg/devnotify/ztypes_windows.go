@@ -10,7 +10,6 @@ type (
 		Data3 uint16
 		Data4 [8]uint8
 	}
-	_HDEVNOTIFY        *byte
 	_DEV_BROADCAST_HDR struct {
 		Size       uint32
 		Devicetype uint32

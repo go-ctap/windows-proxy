@@ -102,17 +102,18 @@ structures (like device information or paths) is CBOR-encoded.
     - If the server fails to open the specified HID device (e.g., device not found, access denied at the HID level),
       the proxy service will typically close the named pipe connection. The client will detect this as an EOF or
       connection error.
+    - If another proxy session is already active for the same device path, the proxy service closes the new named pipe
+      connection.
 
 ### 5. Proxy Phase (After successful `CommandStart`)
 
 Once `CommandStart` is successfully processed:
 
 - **Client to Server (to HID Device):**
-  - The client writes raw CTAPHID request packets directly to the named pipe. These packets should be formatted as
-    expected by the FIDO2 HID device (typically 64-byte reports, potentially prefixed with a HID report ID byte
-    like `0x00` if the underlying HID library or device requires it. The `go-ctaphid` library handles this formatting).
-  - The proxy service reads these bytes and writes them directly to the selected HID device. The server reads
-    up to 65 bytes at a time from the pipe for forwarding.
+  - The client writes raw CTAPHID request reports directly to the named pipe. These reports should include the HID
+    report ID byte followed by the 64-byte CTAPHID packet. The `go-ctaphid` library handles this formatting.
+  - The proxy service reads complete 65-byte HID reports from the pipe and writes them directly to the selected HID
+    device.
 - **Server (from HID Device) to Client:**
   - The proxy service reads raw CTAPHID response packets from the HID device.
   - These packets are written directly to the named pipe for the client to read.
