@@ -24,8 +24,9 @@ func main() {
 
 	conf := &config.Config{
 		Transport: &transport.Config{
-			Address: "localhost:44080",
-			Debug:   transportDebugMode,
+			Address:                 "localhost:44080",
+			Debug:                   transportDebugMode,
+			AllowAuthenticatedUsers: true,
 		},
 	}
 
