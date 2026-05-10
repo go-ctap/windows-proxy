@@ -3,10 +3,12 @@ package proxy
 import (
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,6 +19,8 @@ import (
 const (
 	hidReportSize = 65
 	hidPacketSize = 64
+	fidoUsagePage = 0xf1d0
+	fidoUsage     = 0x01
 )
 
 type Proxy struct {
@@ -79,6 +83,28 @@ func (p *Proxy) open(path string) (*hid.Device, error) {
 	return dev, nil
 }
 
+func (p *Proxy) validateDevicePath(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", errors.New("empty HID path")
+	}
+
+	for devInfo, err := range hid.Enumerate() {
+		if err != nil {
+			return "", err
+		}
+
+		if devInfo.UsagePage != fidoUsagePage || devInfo.Usage != fidoUsage {
+			continue
+		}
+
+		if strings.EqualFold(devInfo.Path, path) {
+			return devInfo.Path, nil
+		}
+	}
+
+	return "", fmt.Errorf("HID path is not an enumerated FIDO device")
+}
+
 func writeFull(w io.Writer, data []byte) error {
 	for len(data) > 0 {
 		n, err := w.Write(data)
@@ -129,10 +155,19 @@ func (p *Proxy) Enumerate() ([]*hid.DeviceInfo, error) {
 	return devInfos, nil
 }
 
-func (p *Proxy) Proxy(conn net.Conn, path string) {
+func (p *Proxy) Proxy(conn net.Conn, requestedPath string) {
 	sessionID := p.nextSession.Add(1)
-	logger := p.logger.With("proxy_session", sessionID, "path", path)
+	logger := p.logger.With("proxy_session", sessionID, "requested_path", requestedPath)
 	startedAt := time.Now()
+
+	// Make sure client requests access to the FIDO2 device
+	path, err := p.validateDevicePath(requestedPath)
+	if err != nil {
+		logger.Warn("Rejected HID proxy start for non-FIDO path", "err", err)
+		_ = conn.Close()
+		return
+	}
+	logger = logger.With("path", path)
 
 	if !p.acquire(path) {
 		logger.Warn("Device already has active proxy session")

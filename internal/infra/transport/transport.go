@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"strings"
 
 	"github.com/go-ctap/windows-proxy/internal/domain"
 	"github.com/go-ctap/windows-proxy/pkg/proxy"
@@ -31,6 +32,35 @@ func NewDelivery(logger *slog.Logger, config *Config, p *proxy.Proxy) domain.Del
 	return d
 }
 
+func pipeSecurityDescriptor(config *Config) string {
+	var b strings.Builder
+
+	// DACL:
+	// - deny all access for network users
+	// - allow full access to Administrators
+	// - allow full access to Local System
+	// - deny FILE_CREATE_PIPE_INSTANCE for Everyone
+	// - optionally allow read/write to authenticated users for legacy clients
+	b.WriteString(`D:(D;OICI;GA;;;S-1-5-2)`)
+	b.WriteString(`(A;OICI;GA;;;S-1-5-32-544)`)
+	b.WriteString(`(A;OICI;GA;;;S-1-5-18)`)
+	b.WriteString(`(D;OICI;0x4;;;S-1-1-0)`)
+	if config.AllowAuthenticatedUsers {
+		b.WriteString(`(A;OICI;GRGW;;;S-1-5-11)`)
+	}
+	for _, sid := range config.AllowedClientSIDs {
+		sid = strings.TrimSpace(sid)
+		if sid == "" {
+			continue
+		}
+		b.WriteString(`(A;OICI;GRGW;;;`)
+		b.WriteString(sid)
+		b.WriteString(`)`)
+	}
+
+	return b.String()
+}
+
 func (d *pipeDelivery) Listen() (net.Listener, error) {
 	addr := hidproxy.NamedPipePath
 	if d.config.Debug {
@@ -43,15 +73,8 @@ func (d *pipeDelivery) Listen() (net.Listener, error) {
 	}
 
 	return winio.ListenPipe(addr, &winio.PipeConfig{
-		// discretionary ACL
-		// deny all access for network users
-		// allow full access to Admin group
-		// allow full access to Local System account
-		// deny FILE_CREATE_PIPE_INSTANCE for Everyone
-		// allow read/write access for authenticated users
-		// allow read/write access for built-in guest account
 		MessageMode:        true,
-		SecurityDescriptor: `D:(D;OICI;GA;;;S-1-5-2)(A;OICI;GA;;;S-1-5-32-544)(A;OICI;GA;;;S-1-5-18)(D;OICI;0x4;;;S-1-1-0)(A;OICI;GRGW;;;S-1-5-11)(A;OICI;GRGW;;;S-1-5-32-546)`,
+		SecurityDescriptor: pipeSecurityDescriptor(d.config),
 	})
 }
 
@@ -71,13 +94,13 @@ func (d *pipeDelivery) Serve(l net.Listener) error {
 		conn, err := l.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
-				d.logger.Info("Pipe listener closed")
+				d.logger.Debug("Pipe listener closed")
 				return nil
 			}
 			d.logger.Error("Pipe accept error", "err", err)
 			continue
 		}
-		d.logger.Info("Accepted pipe connection")
+		d.logger.Debug("Accepted pipe connection")
 
 		go d.handleConn(conn)
 	}
