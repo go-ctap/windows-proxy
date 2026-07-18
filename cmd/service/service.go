@@ -107,10 +107,10 @@ loop:
 }
 
 func isFIDOEvent(event ghid.DeviceEvent) bool {
-	if event.Err != nil || (event.Type != ghid.DeviceEventConnected && event.Type != ghid.DeviceEventDisconnected) {
+	if event.Type != ghid.DeviceEventConnected && event.Type != ghid.DeviceEventDisconnected {
 		return false
 	}
-	if event.DeviceInfo == nil {
+	if event.Err != nil || event.DeviceInfo == nil {
 		return true
 	}
 	return (event.DeviceInfo.UsagePage == 0 || event.DeviceInfo.UsagePage == 0xf1d0) &&

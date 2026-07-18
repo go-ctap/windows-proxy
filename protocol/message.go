@@ -3,7 +3,9 @@ package protocol
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
+	"math"
 
 	"github.com/fxamacker/cbor/v2"
 )
@@ -22,8 +24,15 @@ const (
 
 type Message struct {
 	Command Command
-	length  uint16
 	Data    []byte
+}
+
+func payloadLength(data []byte) (uint16, error) {
+	if len(data) > math.MaxUint16 {
+		return 0, fmt.Errorf("protocol payload is %d bytes, maximum is %d", len(data), math.MaxUint16)
+	}
+
+	return uint16(len(data)), nil
 }
 
 func ParseMessage(reader io.Reader) (Message, error) {
@@ -47,7 +56,6 @@ func ParseMessage(reader io.Reader) (Message, error) {
 
 	return Message{
 		Command: Command(cmd[0]),
-		length:  length,
 		Data:    bData,
 	}, nil
 }
@@ -65,8 +73,10 @@ func NewMessage(cmd Command, data any) (Message, error) {
 			return Message{}, err
 		}
 	}
+	if _, err := payloadLength(b); err != nil {
+		return Message{}, err
+	}
 
-	msg.length = uint16(len(b))
 	msg.Data = b
 
 	return msg, nil
@@ -74,6 +84,10 @@ func NewMessage(cmd Command, data any) (Message, error) {
 
 func (m *Message) WriteTo(w io.Writer) (n int64, err error) {
 	totalLen := 0
+	length, err := payloadLength(m.Data)
+	if err != nil {
+		return 0, err
+	}
 
 	cmdLen, err := w.Write([]byte{byte(m.Command)})
 	if err != nil {
@@ -82,7 +96,7 @@ func (m *Message) WriteTo(w io.Writer) (n int64, err error) {
 	totalLen += cmdLen
 
 	bLen := make([]byte, 2)
-	binary.BigEndian.PutUint16(bLen, m.length)
+	binary.BigEndian.PutUint16(bLen, length)
 	lengthLen, err := w.Write(bLen)
 	if err != nil {
 		return 0, err

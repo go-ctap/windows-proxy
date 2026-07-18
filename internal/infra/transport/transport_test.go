@@ -63,6 +63,32 @@ func TestDevicesChangedSubscription(t *testing.T) {
 	}
 }
 
+func TestDevicesChangedCoalescesForSlowSubscriber(t *testing.T) {
+	d := newTestDelivery()
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+
+	notifications := make(chan struct{}, 1)
+	notifications <- struct{}{}
+	d.subscribers[server] = notifications
+
+	done := make(chan struct{})
+	go func() {
+		d.DevicesChanged()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("DevicesChanged blocked on a slow subscriber")
+	}
+	if got := len(notifications); got != 1 {
+		t.Fatalf("pending notifications = %d, want 1", got)
+	}
+}
+
 func TestShutdownClosesActiveConnectionsAndIsIdempotent(t *testing.T) {
 	d := newTestDelivery()
 	l, err := net.Listen("tcp", "127.0.0.1:0")

@@ -24,15 +24,17 @@ type pipeDelivery struct {
 	mu           sync.Mutex
 	listener     net.Listener
 	connections  map[net.Conn]struct{}
-	subscribers  map[net.Conn]struct{}
+	subscribers  map[net.Conn]chan struct{}
 	stopping     bool
 	wg           sync.WaitGroup
-	notifyMu     sync.Mutex
 	shutdownOnce sync.Once
 	shutdownErr  error
 }
 
-const controlTimeout = 10 * time.Second
+const (
+	controlTimeout           = 10 * time.Second
+	notificationWriteTimeout = 5 * time.Second
+)
 
 func NewDelivery(logger *slog.Logger, config *Config, p *proxy.Proxy) domain.Delivery {
 	d := &pipeDelivery{
@@ -40,7 +42,7 @@ func NewDelivery(logger *slog.Logger, config *Config, p *proxy.Proxy) domain.Del
 		config:      config,
 		proxy:       p,
 		connections: make(map[net.Conn]struct{}),
-		subscribers: make(map[net.Conn]struct{}),
+		subscribers: make(map[net.Conn]chan struct{}),
 	}
 
 	return d
@@ -204,8 +206,9 @@ func (d *pipeDelivery) handleConn(conn net.Conn) {
 			return
 		}
 
+		notifications := make(chan struct{}, 1)
 		d.mu.Lock()
-		d.subscribers[conn] = struct{}{}
+		d.subscribers[conn] = notifications
 		d.mu.Unlock()
 		defer func() {
 			d.mu.Lock()
@@ -213,39 +216,61 @@ func (d *pipeDelivery) handleConn(conn net.Conn) {
 			d.mu.Unlock()
 		}()
 
-		d.writeDevicesChanged(conn)
-		var b [1]byte
-		_, _ = conn.Read(b[:])
+		clientClosed := make(chan struct{})
+		go func() {
+			defer close(clientClosed)
+			var b [1]byte
+			_, _ = conn.Read(b[:])
+		}()
+		defer func() {
+			_ = conn.Close()
+			<-clientClosed
+		}()
+
+		select {
+		case notifications <- struct{}{}:
+		default:
+		}
+		for {
+			select {
+			case <-notifications:
+				if err := d.writeDevicesChanged(conn); err != nil {
+					d.logger.Debug("Device event subscriber closed", "err", err)
+					return
+				}
+			case <-clientClosed:
+				return
+			}
+		}
 	default:
 		d.logger.Error("Unknown command", "command", msg.Command)
 	}
 }
 
-func (d *pipeDelivery) writeDevicesChanged(conn net.Conn) {
+func (d *pipeDelivery) writeDevicesChanged(conn net.Conn) error {
 	message, err := proxyprotocol.NewMessage(proxyprotocol.CommandDevicesChanged, nil)
 	if err != nil {
-		d.logger.Error("New device event message error", "err", err)
-		return
+		return err
 	}
 
-	d.notifyMu.Lock()
-	defer d.notifyMu.Unlock()
-	if _, err := message.WriteTo(conn); err != nil {
-		d.logger.Debug("Device event subscriber closed", "err", err)
-		_ = conn.Close()
+	if err := conn.SetWriteDeadline(time.Now().Add(notificationWriteTimeout)); err != nil {
+		return err
 	}
+	defer func() { _ = conn.SetWriteDeadline(time.Time{}) }()
+
+	_, err = message.WriteTo(conn)
+	return err
 }
 
 func (d *pipeDelivery) DevicesChanged() {
 	d.mu.Lock()
-	subscribers := make([]net.Conn, 0, len(d.subscribers))
-	for conn := range d.subscribers {
-		subscribers = append(subscribers, conn)
-	}
-	d.mu.Unlock()
+	defer d.mu.Unlock()
 
-	for _, conn := range subscribers {
-		d.writeDevicesChanged(conn)
+	for _, notifications := range d.subscribers {
+		select {
+		case notifications <- struct{}{}:
+		default:
+		}
 	}
 }
 
