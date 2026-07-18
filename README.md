@@ -1,6 +1,6 @@
-# CTAP Windows Proxy
+# go-ctap/windows-proxy
 
-CTAP Windows Proxy is a Windows service that gives regular user applications access to FIDO2 HID devices.
+`go-ctap/windows-proxy` is a Windows service that gives regular user applications access to FIDO2 HID devices.
 The service opens the devices with its own permissions and forwards CTAPHID data through a Windows named pipe.
 
 The [`go-ctap/ctap`](https://github.com/go-ctap/ctap) library can use this service, so an application does not need
