@@ -10,13 +10,14 @@ import (
 )
 
 var (
-	modHidsdi                       = windows.NewLazySystemDLL("hid.dll")
-	procHidD_GetHidGuid             = modHidsdi.NewProc("HidD_GetHidGuid")
-	user32                          = syscall.NewLazyDLL("user32.dll")
-	procRegisterDeviceNotificationW = user32.NewProc("RegisterDeviceNotificationW")
+	modHidsdi                        = windows.NewLazySystemDLL("hid.dll")
+	procHidD_GetHidGuid              = modHidsdi.NewProc("HidD_GetHidGuid")
+	user32                           = syscall.NewLazyDLL("user32.dll")
+	procRegisterDeviceNotificationW  = user32.NewProc("RegisterDeviceNotificationW")
+	procUnregisterDeviceNotification = user32.NewProc("UnregisterDeviceNotification")
 )
 
-type _HDEVNOTIFY uintptr
+type DeviceNotification uintptr
 
 func getHidGuid() (*windows.GUID, error) {
 	var hidGuid windows.GUID
@@ -34,7 +35,7 @@ func registerDeviceNotification(
 	hWnd windows.Handle,
 	notificationFilter *_DEV_BROADCAST_DEVICEINTERFACE_W,
 	flags uint32,
-) (_HDEVNOTIFY, error) {
+) (DeviceNotification, error) {
 	r1, _, err := procRegisterDeviceNotificationW.Call(
 		uintptr(hWnd),
 		uintptr(unsafe.Pointer(notificationFilter)),
@@ -44,7 +45,7 @@ func registerDeviceNotification(
 		return 0, err
 	}
 
-	return _HDEVNOTIFY(r1), nil
+	return DeviceNotification(r1), nil
 }
 
 const (
@@ -52,10 +53,10 @@ const (
 	_DEVICE_NOTIFY_SERVICE_HANDLE = 0x00000001
 )
 
-func RegisterDeviceNotification(hReceiver windows.Handle) error {
+func RegisterDeviceNotification(hReceiver windows.Handle) (DeviceNotification, error) {
 	hidGuid, err := getHidGuid()
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	notificationFilter := new(_DEV_BROADCAST_DEVICEINTERFACE_W)
@@ -63,9 +64,13 @@ func RegisterDeviceNotification(hReceiver windows.Handle) error {
 	notificationFilter.Devicetype = _DBT_DEVTYP_DEVICEINTERFACE
 	notificationFilter.Classguid = _GUID(*hidGuid)
 
-	if _, err := registerDeviceNotification(hReceiver, notificationFilter, _DEVICE_NOTIFY_SERVICE_HANDLE); err != nil {
+	return registerDeviceNotification(hReceiver, notificationFilter, _DEVICE_NOTIFY_SERVICE_HANDLE)
+}
+
+func UnregisterDeviceNotification(notification DeviceNotification) error {
+	r1, _, err := procUnregisterDeviceNotification.Call(uintptr(notification))
+	if r1 == 0 {
 		return err
 	}
-
 	return nil
 }

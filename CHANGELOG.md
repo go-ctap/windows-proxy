@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.2.0 - 2026-07-18
+
+### Changed
+
+- Migrated the HID proxy protocol dependency from `github.com/go-ctap/ctaphid/pkg/hidproxy` to `github.com/go-ctap/ctap/hidproxy v0.30.1`.
+- Updated `github.com/go-ctap/hid` to `v0.9.1` and adapted proxy I/O to its context-aware `Read` and `Write` API.
+- Added a control-message deadline and graceful shutdown for accepted connections.
+- Unregister device notifications when the service stops.
+- Broadcast `CommandDevicesChanged` to subscribed clients when the HID topology changes.
+
 ## v0.1.0 - 2026-05-04
 
 ### Changed
