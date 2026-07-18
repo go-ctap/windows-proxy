@@ -5,28 +5,42 @@ import (
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-ctap/windows-proxy/internal/domain"
 	"github.com/go-ctap/windows-proxy/pkg/proxy"
+	proxyprotocol "github.com/go-ctap/windows-proxy/protocol"
 
 	"github.com/Microsoft/go-winio"
 	"github.com/fxamacker/cbor/v2"
-	"github.com/go-ctap/ctaphid/pkg/hidproxy"
 )
 
 type pipeDelivery struct {
 	logger *slog.Logger
 	config *Config
 	proxy  *proxy.Proxy
-	done   chan struct{}
+
+	mu           sync.Mutex
+	listener     net.Listener
+	connections  map[net.Conn]struct{}
+	subscribers  map[net.Conn]struct{}
+	stopping     bool
+	wg           sync.WaitGroup
+	notifyMu     sync.Mutex
+	shutdownOnce sync.Once
+	shutdownErr  error
 }
+
+const controlTimeout = 10 * time.Second
 
 func NewDelivery(logger *slog.Logger, config *Config, p *proxy.Proxy) domain.Delivery {
 	d := &pipeDelivery{
-		logger: logger,
-		config: config,
-		proxy:  p,
-		done:   make(chan struct{}),
+		logger:      logger,
+		config:      config,
+		proxy:       p,
+		connections: make(map[net.Conn]struct{}),
+		subscribers: make(map[net.Conn]struct{}),
 	}
 
 	return d
@@ -62,7 +76,7 @@ func pipeSecurityDescriptor(config *Config) string {
 }
 
 func (d *pipeDelivery) Listen() (net.Listener, error) {
-	addr := hidproxy.NamedPipePath
+	addr := proxyprotocol.NamedPipePath
 	if d.config.Debug {
 		addr = d.config.Address
 	}
@@ -79,21 +93,34 @@ func (d *pipeDelivery) Listen() (net.Listener, error) {
 }
 
 func (d *pipeDelivery) Serve(l net.Listener) error {
-	go func() {
-		// Wait done to close listener
-		<-d.done
+	d.mu.Lock()
+	if d.stopping {
+		d.mu.Unlock()
 		_ = l.Close()
-	}()
+		return nil
+	}
+	if d.listener != nil {
+		d.mu.Unlock()
+		return errors.New("transport is already serving")
+	}
+	d.listener = l
+	d.mu.Unlock()
 
 	defer func() {
-		// Notify that listener closed
-		d.done <- struct{}{}
+		d.mu.Lock()
+		if d.listener == l {
+			d.listener = nil
+		}
+		d.mu.Unlock()
 	}()
 
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			if errors.Is(err, net.ErrClosed) {
+			d.mu.Lock()
+			stopping := d.stopping
+			d.mu.Unlock()
+			if stopping || errors.Is(err, net.ErrClosed) {
 				d.logger.Debug("Pipe listener closed")
 				return nil
 			}
@@ -102,62 +129,148 @@ func (d *pipeDelivery) Serve(l net.Listener) error {
 		}
 		d.logger.Debug("Accepted pipe connection")
 
-		go d.handleConn(conn)
+		d.mu.Lock()
+		if d.stopping {
+			d.mu.Unlock()
+			_ = conn.Close()
+			continue
+		}
+		d.connections[conn] = struct{}{}
+		d.wg.Add(1)
+		d.mu.Unlock()
+
+		go func() {
+			defer func() {
+				d.mu.Lock()
+				delete(d.connections, conn)
+				d.mu.Unlock()
+				d.wg.Done()
+			}()
+			d.handleConn(conn)
+		}()
 	}
 }
 
 func (d *pipeDelivery) handleConn(conn net.Conn) {
-	msg, err := hidproxy.ParseMessage(conn)
+	defer func() { _ = conn.Close() }()
+
+	if err := conn.SetDeadline(time.Now().Add(controlTimeout)); err != nil {
+		d.logger.Error("Set control deadline error", "err", err)
+		return
+	}
+
+	msg, err := proxyprotocol.ParseMessage(conn)
 	if err != nil {
 		d.logger.Error("Parse message error", "err", err)
-		_ = conn.Close()
 		return
 	}
 
 	switch msg.Command {
-	case hidproxy.CommandEnumerate:
+	case proxyprotocol.CommandEnumerate:
 		devInfos, err := d.proxy.Enumerate()
 		if err != nil {
 			d.logger.Error("Device enumeration error", "err", err)
-			_ = conn.Close()
 			return
 		}
 
-		msg, err := hidproxy.NewMessage(hidproxy.CommandEnumerate, devInfos)
+		msg, err := proxyprotocol.NewMessage(proxyprotocol.CommandEnumerate, devInfos)
 		if err != nil {
 			d.logger.Error("NewMessage error", "err", err)
-			_ = conn.Close()
 			return
 		}
 
 		if _, err := msg.WriteTo(conn); err != nil {
 			d.logger.Error("WriteTo error", "err", err)
-			_ = conn.Close()
 			return
 		}
 
 		d.logger.Info("Enumerate response sent")
-		_ = conn.Close()
-	case hidproxy.CommandStart:
+	case proxyprotocol.CommandStart:
 		var path string
 		if err := cbor.Unmarshal(msg.Data, &path); err != nil {
 			d.logger.Error("Unmarshal error", "err", err)
-			_ = conn.Close()
+			return
+		}
+		if err := conn.SetDeadline(time.Time{}); err != nil {
+			d.logger.Error("Clear control deadline error", "err", err)
 			return
 		}
 
 		d.logger.Debug("Start command received", "path", path)
 		d.proxy.Proxy(conn, path)
+	case proxyprotocol.CommandDevicesChanged:
+		if err := conn.SetDeadline(time.Time{}); err != nil {
+			d.logger.Error("Clear control deadline error", "err", err)
+			return
+		}
+
+		d.mu.Lock()
+		d.subscribers[conn] = struct{}{}
+		d.mu.Unlock()
+		defer func() {
+			d.mu.Lock()
+			delete(d.subscribers, conn)
+			d.mu.Unlock()
+		}()
+
+		d.writeDevicesChanged(conn)
+		var b [1]byte
+		_, _ = conn.Read(b[:])
 	default:
 		d.logger.Error("Unknown command", "command", msg.Command)
+	}
+}
+
+func (d *pipeDelivery) writeDevicesChanged(conn net.Conn) {
+	message, err := proxyprotocol.NewMessage(proxyprotocol.CommandDevicesChanged, nil)
+	if err != nil {
+		d.logger.Error("New device event message error", "err", err)
+		return
+	}
+
+	d.notifyMu.Lock()
+	defer d.notifyMu.Unlock()
+	if _, err := message.WriteTo(conn); err != nil {
+		d.logger.Debug("Device event subscriber closed", "err", err)
 		_ = conn.Close()
 	}
 }
 
+func (d *pipeDelivery) DevicesChanged() {
+	d.mu.Lock()
+	subscribers := make([]net.Conn, 0, len(d.subscribers))
+	for conn := range d.subscribers {
+		subscribers = append(subscribers, conn)
+	}
+	d.mu.Unlock()
+
+	for _, conn := range subscribers {
+		d.writeDevicesChanged(conn)
+	}
+}
+
 func (d *pipeDelivery) Shutdown() error {
-	// Close listener
-	d.done <- struct{}{}
-	// Wait for listener close
-	<-d.done
-	return nil
+	d.shutdownOnce.Do(func() {
+		d.mu.Lock()
+		d.stopping = true
+		listener := d.listener
+		connections := make([]net.Conn, 0, len(d.connections))
+		for conn := range d.connections {
+			connections = append(connections, conn)
+		}
+		d.mu.Unlock()
+
+		if listener != nil {
+			if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				d.shutdownErr = err
+			}
+		}
+		for _, conn := range connections {
+			_ = conn.Close()
+		}
+
+		d.wg.Wait()
+	})
+
+	return d.shutdownErr
 }

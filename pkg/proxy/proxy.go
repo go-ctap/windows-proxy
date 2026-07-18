@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -184,12 +185,16 @@ func (p *Proxy) Proxy(conn net.Conn, requestedPath string) {
 	}
 	logger.Info("Proxy started")
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	done := make(chan struct{})
 	closeReason := "unknown"
 	var closeOnce sync.Once
 	closeProxy := func(reason string) {
 		closeOnce.Do(func() {
 			closeReason = reason
+			cancel()
 			close(done)
 			_ = conn.Close()
 			if err := dev.Close(); err != nil {
@@ -235,7 +240,7 @@ func (p *Proxy) Proxy(conn net.Conn, requestedPath string) {
 			data := make([]byte, len(buf))
 			copy(data, buf)
 
-			written, writeErr := dev.Write(data)
+			written, writeErr := dev.Write(ctx, data)
 			if writeErr != nil {
 				select {
 				case <-done:
@@ -263,7 +268,7 @@ func (p *Proxy) Proxy(conn net.Conn, requestedPath string) {
 
 		for {
 			buf := make([]byte, hidPacketSize)
-			n, err := dev.Read(buf)
+			n, err := dev.Read(ctx, buf)
 			if n > 0 {
 				data := make([]byte, n)
 				copy(data, buf[:n])

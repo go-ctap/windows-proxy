@@ -4,6 +4,7 @@ import (
 	"log/slog"
 	"os"
 
+	ghid "github.com/go-ctap/hid"
 	"github.com/go-ctap/windows-proxy/internal/config"
 	"github.com/go-ctap/windows-proxy/internal/domain"
 	"github.com/go-ctap/windows-proxy/pkg/devnotify"
@@ -52,9 +53,34 @@ func (p *program) Execute(args []string, r <-chan svc.ChangeRequest, changes cha
 
 	if statusHandle := svc.StatusHandle(); statusHandle != 0 {
 		_ = wlog.Info(1, "Registering device notification")
-		if err := devnotify.RegisterDeviceNotification(statusHandle); err != nil {
+		notification, err := devnotify.RegisterDeviceNotification(statusHandle)
+		if err != nil {
 			_ = wlog.Error(2, "Failed to register device notification")
 			os.Exit(1)
+		}
+		defer func() {
+			if err := devnotify.UnregisterDeviceNotification(notification); err != nil {
+				p.logger.Error("Failed to unregister device notification", "err", err)
+			}
+		}()
+	} else {
+		receiver, err := ghid.Events()
+		if err != nil {
+			p.logger.Error("Failed to monitor HID device events", "err", err)
+		} else {
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				for event := range receiver.Listen() {
+					if isFIDOEvent(event) {
+						p.delivery.DevicesChanged()
+					}
+				}
+			}()
+			defer func() {
+				_ = receiver.Close()
+				<-done
+			}()
 		}
 	}
 
@@ -64,7 +90,7 @@ loop:
 		case svc.Interrogate:
 			changes <- c.CurrentStatus
 		case svc.DeviceEvent:
-			_ = wlog.Info(1, "Device event")
+			p.delivery.DevicesChanged()
 			changes <- c.CurrentStatus
 		case svc.Stop, svc.Shutdown:
 			if err := p.delivery.Shutdown(); err != nil {
@@ -78,6 +104,17 @@ loop:
 
 	changes <- svc.Status{State: svc.StopPending}
 	return
+}
+
+func isFIDOEvent(event ghid.DeviceEvent) bool {
+	if event.Err != nil || (event.Type != ghid.DeviceEventConnected && event.Type != ghid.DeviceEventDisconnected) {
+		return false
+	}
+	if event.DeviceInfo == nil {
+		return true
+	}
+	return (event.DeviceInfo.UsagePage == 0 || event.DeviceInfo.UsagePage == 0xf1d0) &&
+		(event.DeviceInfo.Usage == 0 || event.DeviceInfo.Usage == 0x01)
 }
 
 func (p *program) run(svcName string, isDebug bool) {

@@ -13,15 +13,15 @@ This program addresses this limitation by acting as a **proxy service**. It is d
 2. **Listen on a Named Pipe:** It exposes a named pipe endpoint for inter-process communication.
 3. **Proxy CTAP Requests:** Client applications can send CTAP requests to this named pipe. The service then forwards
    these requests to the actual FIDO2 HID device and returns the responses.
+4. **Notify About Device Changes:** Clients can subscribe to a lightweight signal and re-enumerate devices when the
+   available FIDO2 token set changes.
 
 This architecture enables unprivileged applications to communicate with FIDO2 tokens. Specifically,
-my [go-ctaphid](https://github.com/go-ctap/ctaphid) library is designed to leverage this proxy,
+the [`go-ctap/ctap`](https://github.com/go-ctap/ctap) library is designed to leverage this proxy,
 allowing Go applications to interact with FIDO2 tokens on Windows without needing administrator rights for
 the application itself.
 
 In essence, this program provides a bridge for unprivileged CTAP access to FIDO2 tokens on Windows.
-
-Okay, here's a documentation draft for your proxy protocol based on the provided Go code.
 
 ## HID Proxy Protocol Documentation
 
@@ -30,12 +30,16 @@ over a Windows Named Pipe.
 
 ### 1. Overview
 
-The protocol enables unprivileged applications to communicate with FIDO2 HID devices. It involves two main phases:
+The protocol enables unprivileged applications to communicate with FIDO2 HID devices. A connection starts with one
+control command and then follows the mode selected by that command:
 
-1. **Control Phase:** The client sends structured messages to enumerate available FIDO2 devices and to select one
-   for proxying.
-2. **Proxy Phase:** Once a device is selected, the named pipe connection switches to a raw byte stream,
-   directly proxying CTAPHID packets between the client and the selected HID device.
+1. `CommandEnumerate` returns the current device list and completes the request.
+2. `CommandStart` switches the connection to a raw CTAPHID proxy stream.
+3. `CommandDevicesChanged` keeps the connection open and sends notifications when the device set may have changed.
+
+The canonical Go definitions for the named pipe path, commands, and message framing live in the public
+[`protocol`](https://pkg.go.dev/github.com/go-ctap/windows-proxy/protocol) package. Clients should use that package
+instead of duplicating protocol constants.
 
 ### 2. Transport
 
@@ -82,7 +86,7 @@ structures (like device information or paths) is CBOR-encoded.
   - If an error occurs during enumeration (e.g., HID subsystem error), the server might close the connection or send an
     error response (the current code implies connection closure or no specific error message format for this command).
 
-#### 4.2. `CommandStart` (Value: `0x02`)
+#### 4.2. `CommandStart` (`0x02`)
 
 - **Purpose:** Instructs the proxy to start relaying raw CTAPHID packets for a specific FIDO2 HID device.
   After a successful `CommandStart`, the protocol transitions to the [Proxy Phase](#5-proxy-phase-after-successful-commandstart).
@@ -105,13 +109,38 @@ structures (like device information or paths) is CBOR-encoded.
     - If another proxy session is already active for the same device path, the proxy service closes the new named pipe
       connection.
 
+#### 4.3. `CommandDevicesChanged` (`0x03`)
+
+- **Purpose:** Subscribes to changes in the set of available FIDO2 HID devices.
+- **Client Request:**
+  - Command: `0x03`
+  - Length: `0x0000` (0)
+  - Data: (empty)
+- **Server Notifications:**
+  - Command: `0x03`
+  - Length: `0x0000` (0)
+  - Data: (empty)
+
+The server keeps this connection open and sends an initial notification as soon as the subscription is established.
+It then sends another notification whenever the device set may have changed.
+
+A notification is deliberately only an invalidation signal. It does not identify the device or distinguish between
+connection and removal. After receiving it, the client should run `CommandEnumerate` on a separate connection and
+compare the new result with its current state.
+
+The subscription must use a dedicated connection. It never transitions to the raw
+[Proxy Phase](#5-proxy-phase-after-successful-commandstart).
+
+When running as a Windows service, notifications come from Windows device events. In debug mode, where there is no
+service control handler, the proxy listens for HID events directly instead.
+
 ### 5. Proxy Phase (After successful `CommandStart`)
 
 Once `CommandStart` is successfully processed:
 
 - **Client to Server (to HID Device):**
   - The client writes raw CTAPHID request reports directly to the named pipe. These reports should include the HID
-    report ID byte followed by the 64-byte CTAPHID packet. The `go-ctaphid` library handles this formatting.
+    report ID byte followed by the 64-byte CTAPHID packet. The `go-ctap/ctap` library handles this formatting.
   - The proxy service reads complete 65-byte HID reports from the pipe and writes them directly to the selected HID
     device.
 - **Server (from HID Device) to Client:**
