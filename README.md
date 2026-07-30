@@ -13,7 +13,8 @@ to run as administrator.
 - Lists connected FIDO2 HID devices.
 - Proxies CTAPHID packets in both directions.
 - Notifies clients when the device list may have changed.
-- Allows only one active proxy session for each device.
+- Shares one physical HID connection across concurrent proxy sessions for each
+  device. CTAPHID channel IDs keep the clients isolated.
 
 ## Requirements
 
@@ -82,8 +83,10 @@ The service supports these commands:
 After `CommandStart`, the client sends complete 65-byte HID reports: one report ID byte and one 64-byte CTAPHID
 packet. The service writes data returned by the HID device back to the same connection.
 
-The requested path must belong to a currently connected FIDO2 device. If the path is invalid, the device cannot be
-opened, or the device already has an active session, the service closes the connection.
+The requested path must belong to a currently connected FIDO2 device. If the path is invalid or the device cannot be
+opened, the service closes the connection. Concurrent sessions for one path share the same physical HID connection;
+complete client messages are serialized when written, and incoming reports are fanned out so each client can filter
+its own CTAPHID channel.
 
 ### Device notifications
 
