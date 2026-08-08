@@ -3,7 +3,7 @@
 `go-ctap/windows-proxy` is a Windows service that gives regular user applications access to FIDO2 HID devices.
 The service opens the devices with its own permissions and forwards CTAPHID data through a Windows named pipe.
 
-The [`go-ctap/ctap`](https://github.com/go-ctap/ctap) library can use this service, so an application does not need
+The [`go-ctap/ctap`](https://github.com/telesma-app/ctap) library can use this service, so an application does not need
 to run as administrator.
 
 ## Features
@@ -59,7 +59,7 @@ Do not use the TCP transport in production.
 ## Protocol
 
 Go clients should use the public
-[`protocol`](https://pkg.go.dev/github.com/go-ctap/windows-proxy/protocol) package. It contains the pipe path,
+[`protocol`](https://pkg.go.dev/github.com/telesma-app/windows-proxy/protocol) package. It contains the pipe path,
 command values, and message helpers.
 
 Each connection starts with one control message:

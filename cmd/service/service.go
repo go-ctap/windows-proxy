@@ -4,10 +4,10 @@ import (
 	"log/slog"
 	"os"
 
-	ghid "github.com/go-ctap/hid"
-	"github.com/go-ctap/windows-proxy/internal/config"
-	"github.com/go-ctap/windows-proxy/internal/domain"
-	"github.com/go-ctap/windows-proxy/pkg/devnotify"
+	ghid "github.com/telesma-app/hid"
+	"github.com/telesma-app/windows-proxy/internal/config"
+	"github.com/telesma-app/windows-proxy/internal/domain"
+	"github.com/telesma-app/windows-proxy/pkg/devnotify"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/debug"
 	"golang.org/x/sys/windows/svc/eventlog"
@@ -64,7 +64,7 @@ func (p *program) Execute(args []string, r <-chan svc.ChangeRequest, changes cha
 			}
 		}()
 	} else {
-		receiver, err := ghid.Events()
+		receiver, err := ghid.Watch()
 		if err != nil {
 			p.logger.Error("Failed to monitor HID device events", "err", err)
 		} else {
@@ -110,7 +110,7 @@ func isFIDOEvent(event ghid.DeviceEvent) bool {
 	if event.Type != ghid.DeviceEventConnected && event.Type != ghid.DeviceEventDisconnected {
 		return false
 	}
-	if event.Err != nil || event.DeviceInfo == nil {
+	if event.MetadataErr != nil || event.DeviceInfo == nil {
 		return true
 	}
 	return (event.DeviceInfo.UsagePage == 0 || event.DeviceInfo.UsagePage == 0xf1d0) &&

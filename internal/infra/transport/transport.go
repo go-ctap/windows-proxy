@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-ctap/windows-proxy/internal/domain"
-	"github.com/go-ctap/windows-proxy/pkg/proxy"
-	proxyprotocol "github.com/go-ctap/windows-proxy/protocol"
+	"github.com/telesma-app/windows-proxy/internal/domain"
+	"github.com/telesma-app/windows-proxy/pkg/proxy"
+	proxyprotocol "github.com/telesma-app/windows-proxy/protocol"
 
 	"github.com/Microsoft/go-winio"
 	"github.com/fxamacker/cbor/v2"

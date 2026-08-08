@@ -16,7 +16,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/go-ctap/hid"
+	"github.com/telesma-app/hid"
 )
 
 const (

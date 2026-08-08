@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/go-ctap/windows-proxy/internal/config"
-	"github.com/go-ctap/windows-proxy/internal/infra/transport"
-	"github.com/go-ctap/windows-proxy/pkg/proxy"
+	"github.com/telesma-app/windows-proxy/internal/config"
+	"github.com/telesma-app/windows-proxy/internal/infra/transport"
+	"github.com/telesma-app/windows-proxy/pkg/proxy"
 
 	"golang.org/x/sys/windows/svc"
 )

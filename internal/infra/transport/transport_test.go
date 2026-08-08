@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-ctap/windows-proxy/pkg/proxy"
-	proxyprotocol "github.com/go-ctap/windows-proxy/protocol"
+	"github.com/telesma-app/windows-proxy/pkg/proxy"
+	proxyprotocol "github.com/telesma-app/windows-proxy/protocol"
 )
 
 func newTestDelivery() *pipeDelivery {

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	ghid "github.com/go-ctap/hid"
+	ghid "github.com/telesma-app/hid"
 )
 
 func TestIsFIDOEvent(t *testing.T) {
@@ -20,8 +20,8 @@ func TestIsFIDOEvent(t *testing.T) {
 		{
 			name: "metadata error",
 			event: ghid.DeviceEvent{
-				Type: ghid.DeviceEventConnected,
-				Err:  errors.New("metadata unavailable"),
+				Type:        ghid.DeviceEventConnected,
+				MetadataErr: errors.New("metadata unavailable"),
 			},
 			want: true,
 		},
